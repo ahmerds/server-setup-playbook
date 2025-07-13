@@ -10,8 +10,8 @@
     ssh_public_key: "{{ lookup('file', ssh_public_key_file, errors='ignore') | default('') }}"
     swap_size: "{{ (ansible_memtotal_mb * 2) | int }}M"  # 2x RAM
     timezone: "UTC"
-    fail2ban_bantime: "1h"
-    fail2ban_maxretry: 3
+    fail2ban_bantime: "30m"
+    fail2ban_maxretry: 10
     docker_users:
       - "{{ new_user }}"
     
@@ -140,7 +140,6 @@
         key: "{{ ssh_public_key }}"
         state: present
         exclusive: no
-        comment: "Added by Ansible setup"
       tags: [user, ssh]
 
     - name: Verify SSH key was added successfully
@@ -165,6 +164,22 @@
     # SSH SECURITY CONFIGURATION
     # ====================================
     
+    - name: Create SSH privilege separation directory
+      file:
+        path: /run/sshd
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      tags: [security, ssh]
+
+    - name: Ensure SSH service is running and enabled
+      systemd:
+        name: ssh
+        state: started
+        enabled: yes
+      tags: [security, ssh]
+
     - name: Backup original SSH configuration
       copy:
         src: /etc/ssh/sshd_config
@@ -200,9 +215,9 @@
         backup: yes
         validate: '/usr/sbin/sshd -t -f %s'
       loop:
-        - { regexp: '^#?PermitRootLogin.*', line: 'PermitRootLogin no' }
+        # - { regexp: '^#?PermitRootLogin.*', line: 'PermitRootLogin no' }
         - { regexp: '^#?UsePAM.*', line: 'UsePAM no' }
-        - { regexp: '^#?AllowUsers.*', line: "AllowUsers {{ new_user }}" }
+        # - { regexp: '^#?AllowUsers.*', line: "AllowUsers {{ new_user }}" }
       notify: restart ssh
       tags: [security, ssh]
 
