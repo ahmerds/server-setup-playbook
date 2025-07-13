@@ -1,0 +1,11 @@
+# Run playbook
+ansible-playbook -i inventory.ini setup.yml
+
+# Only security-related tasks
+ansible-playbook -i inventory.ini setup.yml --tags security
+
+# Only Docker installation
+ansible-playbook -i inventory.ini setup.yml --tags docker
+
+# Skip swap configuration
+ansible-playbook -i inventory.ini setup.yml --skip-tags swap

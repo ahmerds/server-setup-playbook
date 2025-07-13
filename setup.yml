@@ -1,0 +1,435 @@
+- name: Ubuntu 24.04 Production VM Setup
+  hosts: all
+  become: yes
+  gather_facts: yes
+  vars:
+    # Configuration variables - customize these for your setup
+    new_user: "{{ ansible_user_override | default('user') }}"
+    ssh_public_key: "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"
+    swap_size: "{{ (ansible_memtotal_mb * 2) | int }}M"  # 2x RAM
+    timezone: "UTC"
+    fail2ban_bantime: "1h"
+    fail2ban_maxretry: 3
+    docker_users:
+      - "{{ new_user }}"
+    
+    # Security settings
+    disable_sudo_password: true
+    enable_automatic_updates: true
+    
+    # Firewall ports to open (customize as needed)
+    firewall_allowed_ports:
+      - "22"    # SSH
+      - "80"    # HTTP
+      - "443"   # HTTPS
+
+  tasks:
+    # ====================================
+    # INITIAL SYSTEM SETUP
+    # ====================================
+    
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      tags: [system, updates]
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+        autoremove: yes
+        autoclean: yes
+      tags: [system, updates]
+
+    - name: Install essential packages
+      apt:
+        name:
+          - curl
+          - wget
+          - git
+          - htop
+          - tree
+          - unzip
+          - software-properties-common
+          - apt-transport-https
+          - ca-certificates
+          - gnupg
+          - lsb-release
+          - vim
+          - nano
+          - fail2ban
+          - ufw
+          - ntp
+          - logrotate
+          - rsyslog
+          - cron
+          - sudo
+        state: present
+      tags: [system, packages]
+
+    - name: Set timezone
+      timezone:
+        name: "{{ timezone }}"
+      tags: [system, timezone]
+
+    - name: Configure NTP
+      service:
+        name: ntp
+        state: started
+        enabled: yes
+      tags: [system, ntp]
+
+    # ====================================
+    # USER MANAGEMENT
+    # ====================================
+    
+    - name: Create new user
+      user:
+        name: "{{ new_user }}"
+        shell: /bin/bash
+        create_home: yes
+        groups: sudo
+        append: yes
+        password: "!"  # Disable password login
+      tags: [user, security]
+
+    - name: Create .ssh directory for new user
+      file:
+        path: "/home/{{ new_user }}/.ssh"
+        state: directory
+        owner: "{{ new_user }}"
+        group: "{{ new_user }}"
+        mode: '0700'
+      tags: [user, ssh]
+
+    - name: Add SSH public key to new user
+      authorized_key:
+        user: "{{ new_user }}"
+        key: "{{ ssh_public_key }}"
+        state: present
+        exclusive: yes
+      tags: [user, ssh]
+
+    - name: Configure sudoers for passwordless sudo (optional)
+      lineinfile:
+        path: /etc/sudoers
+        line: '%sudo ALL=(ALL) NOPASSWD:ALL'
+        validate: '/usr/sbin/visudo -cf %s'
+      when: disable_sudo_password
+      tags: [user, security]
+
+    # ====================================
+    # SSH SECURITY CONFIGURATION
+    # ====================================
+    
+    - name: Configure SSH security settings
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        backup: yes
+      loop:
+        - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
+        - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
+        - { regexp: '^#?UsePAM', line: 'UsePAM no' }
+        - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
+        - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval 300' }
+        - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax 2' }
+        - { regexp: '^#?Protocol', line: 'Protocol 2' }
+        - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
+        - { regexp: '^#?AllowUsers', line: "AllowUsers {{ new_user }}" }
+      notify: restart ssh
+      tags: [security, ssh]
+
+    # ====================================
+    # DOCKER INSTALLATION
+    # ====================================
+    
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+      tags: [docker]
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+      tags: [docker]
+
+    - name: Install Docker
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        update_cache: yes
+      tags: [docker]
+
+    - name: Add users to docker group
+      user:
+        name: "{{ item }}"
+        groups: docker
+        append: yes
+      loop: "{{ docker_users }}"
+      tags: [docker]
+
+    - name: Enable and start Docker service
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+      tags: [docker]
+
+    # ====================================
+    # FIREWALL CONFIGURATION
+    # It is recommended to use your VM provider's firewall instead, but
+    # you can uncommment the lines below to use UFW.
+    # ====================================
+    
+    # - name: Reset UFW to defaults
+    #   ufw:
+    #     state: reset
+    #   tags: [firewall, security]
+
+    # - name: Set UFW default policies
+    #   ufw:
+    #     policy: "{{ item.policy }}"
+    #     direction: "{{ item.direction }}"
+    #   loop:
+    #     - { direction: incoming, policy: deny }
+    #     - { direction: outgoing, policy: allow }
+    #     - { direction: routed, policy: deny }
+    #   tags: [firewall, security]
+
+    # - name: Allow SSH connections
+    #   ufw:
+    #     rule: allow
+    #     port: "22"
+    #     proto: tcp
+    #   tags: [firewall, security]
+
+    # - name: Open additional firewall ports
+    #   ufw:
+    #     rule: allow
+    #     port: "{{ item }}"
+    #     proto: tcp
+    #   loop: "{{ firewall_allowed_ports }}"
+    #   when: item != "22"  # SSH already handled above
+    #   tags: [firewall, security]
+
+    # - name: Enable UFW
+    #   ufw:
+    #     state: enabled
+    #   tags: [firewall, security]
+
+    # ====================================
+    # SWAP CONFIGURATION
+    # ====================================
+    
+    - name: Check if swap file exists
+      stat:
+        path: /swapfile
+      register: swap_file
+      tags: [swap, performance]
+
+    - name: Turn off existing swap
+      command: swapoff -a
+      when: swap_file.stat.exists
+      tags: [swap, performance]
+
+    - name: Remove existing swap file
+      file:
+        path: /swapfile
+        state: absent
+      when: swap_file.stat.exists
+      tags: [swap, performance]
+
+    - name: Create swap file
+      command: fallocate -l {{ swap_size }} /swapfile
+      tags: [swap, performance]
+
+    - name: Set swap file permissions
+      file:
+        path: /swapfile
+        mode: '0600'
+        owner: root
+        group: root
+      tags: [swap, performance]
+
+    - name: Make swap file
+      command: mkswap /swapfile
+      tags: [swap, performance]
+
+    - name: Enable swap file
+      command: swapon /swapfile
+      tags: [swap, performance]
+
+    - name: Add swap to fstab
+      lineinfile:
+        path: /etc/fstab
+        line: '/swapfile none swap sw 0 0'
+        backup: yes
+      tags: [swap, performance]
+
+    - name: Set swappiness
+      sysctl:
+        name: vm.swappiness
+        value: '10'
+        state: present
+        sysctl_file: /etc/sysctl.d/99-swappiness.conf
+      tags: [swap, performance]
+
+    # ====================================
+    # FAIL2BAN CONFIGURATION
+    # ====================================
+    
+    - name: Copy fail2ban jail configuration
+      copy:
+        src: /etc/fail2ban/jail.conf
+        dest: /etc/fail2ban/jail.local
+        remote_src: yes
+        backup: yes
+      tags: [security, fail2ban]
+
+    - name: Configure fail2ban jail.local
+      blockinfile:
+        path: /etc/fail2ban/jail.local
+        block: |
+          [DEFAULT]
+          bantime = {{ fail2ban_bantime }}
+          findtime = 10m
+          maxretry = {{ fail2ban_maxretry }}
+          ignoreself = true
+          ignoreip = 127.0.0.1/8 ::1
+
+          [sshd]
+          enabled = true
+          mode = aggressive
+          port = 22
+          logpath = %(sshd_log)s
+          backend = %(sshd_backend)s
+        marker: "# {mark} ANSIBLE MANAGED BLOCK"
+        backup: yes
+      notify: restart fail2ban
+      tags: [security, fail2ban]
+
+    - name: Start and enable fail2ban
+      systemd:
+        name: fail2ban
+        state: started
+        enabled: yes
+      tags: [security, fail2ban]
+
+    # ====================================
+    # ADDITIONAL SECURITY HARDENING
+    # ====================================
+    
+    - name: Configure kernel parameters for security
+      sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        state: present
+        sysctl_file: /etc/sysctl.d/99-security.conf
+      loop:
+        - { name: 'net.ipv4.ip_forward', value: '0' }
+        - { name: 'net.ipv4.conf.all.send_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.default.send_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.all.accept_source_route', value: '0' }
+        - { name: 'net.ipv4.conf.default.accept_source_route', value: '0' }
+        - { name: 'net.ipv4.conf.all.accept_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.default.accept_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.all.secure_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.default.secure_redirects', value: '0' }
+        - { name: 'net.ipv4.conf.all.log_martians', value: '1' }
+        - { name: 'net.ipv4.conf.default.log_martians', value: '1' }
+        - { name: 'net.ipv4.icmp_echo_ignore_broadcasts', value: '1' }
+        - { name: 'net.ipv4.icmp_ignore_bogus_error_responses', value: '1' }
+        - { name: 'net.ipv4.tcp_syncookies', value: '1' }
+        - { name: 'kernel.dmesg_restrict', value: '1' }
+        - { name: 'kernel.kptr_restrict', value: '2' }
+        - { name: 'fs.suid_dumpable', value: '0' }
+      tags: [security, kernel]
+
+    - name: Configure automatic security updates
+      apt:
+        name: unattended-upgrades
+        state: present
+      when: enable_automatic_updates
+      tags: [security, updates]
+
+    - name: Configure unattended-upgrades
+      template:
+        src: 50unattended-upgrades.j2
+        dest: /etc/apt/apt.conf.d/50unattended-upgrades
+        backup: yes
+      when: enable_automatic_updates
+      tags: [security, updates]
+
+    - name: Enable automatic updates
+      template:
+        src: 20auto-upgrades.j2
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        backup: yes
+      when: enable_automatic_updates
+      tags: [security, updates]
+
+    - name: Configure log rotation
+      template:
+        src: rsyslog.j2
+        dest: /etc/logrotate.d/rsyslog
+        backup: yes
+      tags: [logging]
+
+    - name: Set proper file permissions on sensitive files
+      file:
+        path: "{{ item }}"
+        mode: '0600'
+        owner: root
+        group: root
+      loop:
+        - /etc/ssh/sshd_config
+        - /etc/sudoers
+        - /etc/shadow
+        - /etc/gshadow
+      tags: [security, permissions]
+
+    - name: Remove unnecessary packages
+      apt:
+        name:
+          - telnet
+          - rsh-client
+          - rsh-redone-client
+          - talk
+          - ntalk
+        state: absent
+        autoremove: yes
+      tags: [security, cleanup]
+
+    # ====================================
+    # FINAL SYSTEM CLEANUP
+    # ====================================
+    
+    - name: Clean apt cache
+      apt:
+        autoclean: yes
+        autoremove: yes
+      tags: [cleanup]
+
+    - name: Update locate database
+      command: updatedb
+      tags: [cleanup]
+
+  handlers:
+    - name: restart ssh
+      systemd:
+        name: ssh
+        state: restarted
+
+    - name: restart fail2ban
+      systemd:
+        name: fail2ban
+        state: restarted
