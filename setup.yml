@@ -4,8 +4,8 @@
   gather_facts: yes
   vars:
     # Configuration variables - customize these for your setup
-    new_user: "{{ ansible_user_override | default('deployer') }}"
-    ssh_public_key: "{{ lookup('file', '~/.ssh/avelis.pub') }}"
+    new_user: "{{ ansible_user_override | default('user') }}"
+    ssh_public_key: "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"
     swap_size: "{{ (ansible_memtotal_mb * 2) | int }}M"  # 2x RAM
     timezone: "UTC"
     fail2ban_bantime: "1h"
