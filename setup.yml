@@ -5,7 +5,7 @@
   vars:
     # Configuration variables - customize these for your setup
     new_user: "{{ ansible_user_override | default('user') }}"
-    ssh_public_key_file: "{{ ansible_env.HOME }}/.ssh/id_rsa.pub"
+    ssh_public_key_file: "~/.ssh/id_rsa.pub"
     # Add fallback for SSH key content
     ssh_public_key: "{{ lookup('file', ssh_public_key_file, errors='ignore') | default('') }}"
     swap_size: "{{ (ansible_memtotal_mb * 2) | int }}M"  # 2x RAM
