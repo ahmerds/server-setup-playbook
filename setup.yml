@@ -10,8 +10,13 @@
     ssh_public_key: "{{ lookup('file', ssh_public_key_file, errors='ignore') | default('') }}"
     swap_size: "{{ (ansible_memtotal_mb * 2) | int }}M"  # 2x RAM
     timezone: "UTC"
-    fail2ban_bantime: "30m"
-    fail2ban_maxretry: 10
+    # Strict fail2ban configuration
+    fail2ban_bantime: "1h"
+    fail2ban_findtime: "10m"
+    fail2ban_maxretry: 5
+    fail2ban_recidive_bantime: "1w"
+    fail2ban_recidive_findtime: "1d"
+    fail2ban_recidive_maxretry: 5
     docker_users:
       - "{{ new_user }}"
     
@@ -390,16 +395,151 @@
         content: |
           [DEFAULT]
           bantime = {{ fail2ban_bantime }}
-          findtime = 10m
+          findtime = {{ fail2ban_findtime }}
           maxretry = {{ fail2ban_maxretry }}
           ignoreself = true
           ignoreip = 127.0.0.1/8 ::1
+          
+          # Email notifications (configure if needed)
+          # destemail = admin@example.com
+          # sendername = Fail2Ban
+          # mta = sendmail
+          # action = %(action_mwl)s
+          
+          # Default action (ban only)
+          action = %(action_)s
 
           [sshd]
           enabled = true
           port = 22
           logpath = %(sshd_log)s
           backend = %(sshd_backend)s
+          maxretry = {{ fail2ban_maxretry }}
+          findtime = {{ fail2ban_findtime }}
+          bantime = {{ fail2ban_bantime }}
+
+          [sshd-ddos]
+          enabled = true
+          port = 22
+          logpath = %(sshd_log)s
+          maxretry = 2
+          findtime = 2m
+          bantime = {{ fail2ban_bantime }}
+
+          [apache-auth]
+          enabled = true
+          port = 80,443
+          logpath = /var/log/apache2/error.log
+          maxretry = 3
+          findtime = {{ fail2ban_findtime }}
+          bantime = {{ fail2ban_bantime }}
+
+          [apache-badbots]
+          enabled = true
+          port = 80,443
+          logpath = /var/log/apache2/access.log
+          maxretry = 2
+          findtime = {{ fail2ban_findtime }}
+          bantime = {{ fail2ban_bantime }}
+
+          [apache-noscript]
+          enabled = true
+          port = 80,443
+          logpath = /var/log/apache2/access.log
+          maxretry = 3
+          findtime = {{ fail2ban_findtime }}
+          bantime = {{ fail2ban_bantime }}
+
+          [apache-overflows]
+          enabled = true
+          port = 80,443
+          logpath = /var/log/apache2/access.log
+          maxretry = 2
+          findtime = {{ fail2ban_findtime }}
+          bantime = {{ fail2ban_bantime }}
+
+          [nginx-http-auth]
+          enabled = true
+          port = 80,443
+          logpath = /var/log/nginx/error.log
+          maxretry = 3
+          findtime = {{ fail2ban_findtime }}
+          bantime = {{ fail2ban_bantime }}
+
+          [nginx-limit-req]
+          enabled = true
+          port = 80,443
+          logpath = /var/log/nginx/error.log
+          maxretry = 2
+          findtime = {{ fail2ban_findtime }}
+          bantime = {{ fail2ban_bantime }}
+
+          [nginx-botsearch]
+          enabled = true
+          port = 80,443
+          logpath = /var/log/nginx/access.log
+          maxretry = 2
+          findtime = {{ fail2ban_findtime }}
+          bantime = {{ fail2ban_bantime }}
+
+          [recidive]
+          enabled = true
+          logpath = /var/log/fail2ban.log
+          banaction = %(banaction_allports)s
+          bantime = {{ fail2ban_recidive_bantime }}
+          findtime = {{ fail2ban_recidive_findtime }}
+          maxretry = {{ fail2ban_recidive_maxretry }}
+          protocol = all
+
+          [postfix-sasl]
+          enabled = true
+          port = smtp,465,submission
+          logpath = /var/log/mail.log
+          maxretry = 3
+          findtime = {{ fail2ban_findtime }}
+          bantime = {{ fail2ban_bantime }}
+
+          [dovecot]
+          enabled = true
+          port = pop3,pop3s,imap,imaps,submission,465,sieve
+          logpath = /var/log/mail.log
+          maxretry = 3
+          findtime = {{ fail2ban_findtime }}
+          bantime = {{ fail2ban_bantime }}
+        backup: yes
+        owner: root
+        group: root
+        mode: '0644'
+      tags: [security, fail2ban]
+
+    - name: Install additional fail2ban filters
+      apt:
+        name:
+          - fail2ban-firewalld
+        state: present
+      ignore_errors: yes
+      tags: [security, fail2ban]
+
+    - name: Create custom fail2ban filter for suspicious user agents
+      copy:
+        dest: /etc/fail2ban/filter.d/apache-badbots.conf
+        content: |
+          [Definition]
+          failregex = ^<HOST> -.*"(GET|POST|HEAD).*HTTP.*".*(".*".*){2}$
+          ignoreregex =
+        backup: yes
+        owner: root
+        group: root
+        mode: '0644'
+      tags: [security, fail2ban]
+
+    - name: Create custom fail2ban filter for nginx bot searches
+      copy:
+        dest: /etc/fail2ban/filter.d/nginx-botsearch.conf
+        content: |
+          [Definition]
+          failregex = ^<HOST> -.*"(GET|POST|HEAD).*(\.php|\.asp|\.exe|\.pl|\.cgi|\.scgi).*HTTP.*".*$
+          ignoreregex =
         backup: yes
         owner: root
         group: root
@@ -429,6 +569,17 @@
       command: fail2ban-client ping
       register: fail2ban_ping
       failed_when: fail2ban_ping.rc != 0
+      tags: [security, fail2ban]
+
+    - name: Display fail2ban status (strict mode active)
+      command: fail2ban-client status
+      register: fail2ban_status
+      changed_when: false
+      tags: [security, fail2ban]
+
+    - name: Show fail2ban jail status
+      debug:
+        msg: "Fail2ban strict mode active. Jails: {{ fail2ban_status.stdout }}"
       tags: [security, fail2ban]
 
     # ====================================
