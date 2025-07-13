@@ -128,17 +128,29 @@
         regexp: "{{ item.regexp }}"
         line: "{{ item.line }}"
         backup: yes
+        validate: '/usr/sbin/sshd -t -f %s'
       loop:
-        - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
-        - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
-        - { regexp: '^#?UsePAM', line: 'UsePAM no' }
-        - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
-        - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval 300' }
-        - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax 2' }
-        - { regexp: '^#?Protocol', line: 'Protocol 2' }
-        - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
-        - { regexp: '^#?AllowUsers', line: "AllowUsers {{ new_user }}" }
+        - { regexp: '^#?PasswordAuthentication.*', line: 'PasswordAuthentication no' }
+        - { regexp: '^#?PermitRootLogin.*', line: 'PermitRootLogin no' }
+        - { regexp: '^#?UsePAM.*', line: 'UsePAM no' }
+        - { regexp: '^#?MaxAuthTries.*', line: 'MaxAuthTries 3' }
+        - { regexp: '^#?ClientAliveInterval.*', line: 'ClientAliveInterval 300' }
+        - { regexp: '^#?ClientAliveCountMax.*', line: 'ClientAliveCountMax 2' }
+        - { regexp: '^#?X11Forwarding.*', line: 'X11Forwarding no' }
+        - { regexp: '^#?AllowUsers.*', line: "AllowUsers {{ new_user }}" }
       notify: restart ssh
+      tags: [security, ssh]
+
+    - name: Ensure SSH service is running
+      systemd:
+        name: ssh
+        state: started
+        enabled: yes
+      tags: [security, ssh]
+
+    - name: Test SSH configuration
+      command: sshd -t
+      changed_when: false
       tags: [security, ssh]
 
     # ====================================
@@ -286,19 +298,18 @@
     # ====================================
     # FAIL2BAN CONFIGURATION
     # ====================================
-    
-    - name: Copy fail2ban jail configuration
-      copy:
-        src: /etc/fail2ban/jail.conf
-        dest: /etc/fail2ban/jail.local
-        remote_src: yes
-        backup: yes
+
+    - name: Ensure fail2ban is stopped before reconfiguration
+      systemd:
+        name: fail2ban
+        state: stopped
+      ignore_errors: yes
       tags: [security, fail2ban]
 
-    - name: Configure fail2ban jail.local
-      blockinfile:
-        path: /etc/fail2ban/jail.local
-        block: |
+    - name: Create fail2ban jail.local configuration
+      copy:
+        dest: /etc/fail2ban/jail.local
+        content: |
           [DEFAULT]
           bantime = {{ fail2ban_bantime }}
           findtime = 10m
@@ -308,13 +319,19 @@
 
           [sshd]
           enabled = true
-          mode = aggressive
           port = 22
           logpath = %(sshd_log)s
           backend = %(sshd_backend)s
-        marker: "# {mark} ANSIBLE MANAGED BLOCK"
         backup: yes
-      notify: restart fail2ban
+        owner: root
+        group: root
+        mode: '0644'
+      tags: [security, fail2ban]
+
+    - name: Test fail2ban configuration
+      command: fail2ban-client -t
+      register: fail2ban_test
+      failed_when: fail2ban_test.rc != 0
       tags: [security, fail2ban]
 
     - name: Start and enable fail2ban
@@ -322,6 +339,18 @@
         name: fail2ban
         state: started
         enabled: yes
+        daemon_reload: yes
+      tags: [security, fail2ban]
+
+    - name: Wait for fail2ban to start
+      pause:
+        seconds: 5
+      tags: [security, fail2ban]
+
+    - name: Verify fail2ban is running
+      command: fail2ban-client ping
+      register: fail2ban_ping
+      failed_when: fail2ban_ping.rc != 0
       tags: [security, fail2ban]
 
     # ====================================
@@ -426,9 +455,13 @@
   handlers:
     - name: restart ssh
       systemd:
-        name: ssh
+        name: "{{ item }}"
         state: restarted
-
+      loop:
+        - ssh
+        - sshd
+      ignore_errors: yes
+    
     - name: restart fail2ban
       systemd:
         name: fail2ban
