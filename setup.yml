@@ -419,9 +419,9 @@
         autoremove: yes
       tags: [cleanup]
 
-    - name: Update locate database
-      command: updatedb
-      tags: [cleanup]
+    # - name: Update locate database
+    #   command: updatedb
+    #   tags: [cleanup]
 
   handlers:
     - name: restart ssh
