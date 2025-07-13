@@ -4,8 +4,8 @@
   gather_facts: yes
   vars:
     # Configuration variables - customize these for your setup
-    new_user: "{{ ansible_user_override | default('user') }}"
-    ssh_public_key_file: "{{ ansible_env.HOME }}/.ssh/id_rsa.pub"
+    new_user: "{{ ansible_user_override | default('deployer') }}"
+    ssh_public_key_file: "{{ ansible_env.HOME }}/.ssh/avelis.pub"
     # Add fallback for SSH key content
     ssh_public_key: "{{ lookup('file', ssh_public_key_file, errors='ignore') | default('') }}"
     swap_size: "{{ (ansible_memtotal_mb * 2) | int }}M"  # 2x RAM
@@ -89,6 +89,7 @@
       stat:
         path: "{{ ssh_public_key_file }}"
       delegate_to: localhost
+      become: no
       register: ssh_key_stat
       tags: [user, ssh]
 
@@ -96,12 +97,14 @@
       fail:
         msg: "SSH public key not found at {{ ssh_public_key_file }}. Please generate one with 'ssh-keygen -t rsa -b 4096'"
       when: not ssh_key_stat.stat.exists or ssh_public_key == ""
+      become: no 
       tags: [user, ssh]
 
     - name: Display SSH public key for verification
       debug:
         msg: "Using SSH public key: {{ ssh_public_key[:50] }}..."
       when: ssh_public_key != ""
+      become: no
       tags: [user, ssh]
 
     - name: Create new user
@@ -111,7 +114,7 @@
         create_home: yes
         groups: sudo
         append: yes
-        password: "!"  # Disable password login
+        password: "!"
       tags: [user, security]
 
     - name: Configure sudoers for passwordless sudo
@@ -136,7 +139,7 @@
         user: "{{ new_user }}"
         key: "{{ ssh_public_key }}"
         state: present
-        exclusive: no  # Don't remove other keys
+        exclusive: no
         comment: "Added by Ansible setup"
       tags: [user, ssh]
 
@@ -203,7 +206,6 @@
       notify: restart ssh
       tags: [security, ssh]
 
-    # Only disable password authentication after everything else is confirmed
     - name: Disable password authentication (final step)
       lineinfile:
         path: /etc/ssh/sshd_config
