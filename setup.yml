@@ -215,9 +215,9 @@
         backup: yes
         validate: '/usr/sbin/sshd -t -f %s'
       loop:
-        # - { regexp: '^#?PermitRootLogin.*', line: 'PermitRootLogin no' }
-        - { regexp: '^#?UsePAM.*', line: 'UsePAM no' }
-        # - { regexp: '^#?AllowUsers.*', line: "AllowUsers {{ new_user }}" }
+        - { regexp: '^#?PermitRootLogin.*', line: 'PermitRootLogin no' }
+        - { regexp: '^#?UsePAM.*', line: 'UsePAM yes' }
+        # - { regexp: '^#?AllowUsers.*', line: "AllowUsers root {{ new_user }}" }
       notify: restart ssh
       tags: [security, ssh]
 
