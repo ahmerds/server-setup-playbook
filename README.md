@@ -53,3 +53,5 @@ Key variables in `setup.yml`:
 - Fail2ban for intrusion prevention
 - UFW firewall (optional)
 - Automatic security updates
+
+Note that you may need to reboot your VM after you run the script
