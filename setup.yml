@@ -5,7 +5,9 @@
   vars:
     # Configuration variables - customize these for your setup
     new_user: "{{ ansible_user_override | default('user') }}"
-    ssh_public_key: "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"
+    ssh_public_key_file: "{{ ansible_env.HOME }}/.ssh/id_rsa.pub"
+    # Add fallback for SSH key content
+    ssh_public_key: "{{ lookup('file', ssh_public_key_file, errors='ignore') | default('') }}"
     swap_size: "{{ (ansible_memtotal_mb * 2) | int }}M"  # 2x RAM
     timezone: "UTC"
     fail2ban_bantime: "1h"
@@ -83,6 +85,25 @@
     # USER MANAGEMENT
     # ====================================
     
+    - name: Verify SSH public key exists
+      stat:
+        path: "{{ ssh_public_key_file }}"
+      delegate_to: localhost
+      register: ssh_key_stat
+      tags: [user, ssh]
+
+    - name: Fail if SSH public key is missing
+      fail:
+        msg: "SSH public key not found at {{ ssh_public_key_file }}. Please generate one with 'ssh-keygen -t rsa -b 4096'"
+      when: not ssh_key_stat.stat.exists or ssh_public_key == ""
+      tags: [user, ssh]
+
+    - name: Display SSH public key for verification
+      debug:
+        msg: "Using SSH public key: {{ ssh_public_key[:50] }}..."
+      when: ssh_public_key != ""
+      tags: [user, ssh]
+
     - name: Create new user
       user:
         name: "{{ new_user }}"
@@ -107,7 +128,39 @@
         user: "{{ new_user }}"
         key: "{{ ssh_public_key }}"
         state: present
-        exclusive: yes
+        exclusive: no  # Don't remove other keys
+        comment: "Added by Ansible setup"
+      tags: [user, ssh]
+
+    - name: Verify SSH key was added successfully
+      stat:
+        path: "/home/{{ new_user }}/.ssh/authorized_keys"
+      register: authorized_keys_stat
+      tags: [user, ssh]
+
+    - name: Check authorized_keys content
+      command: cat "/home/{{ new_user }}/.ssh/authorized_keys"
+      register: authorized_keys_content
+      changed_when: false
+      tags: [user, ssh]
+
+    - name: Fail if SSH key not properly added
+      fail:
+        msg: "SSH key was not properly added to authorized_keys file"
+      when: not authorized_keys_stat.stat.exists or ssh_public_key.split()[1] not in authorized_keys_content.stdout
+      tags: [user, ssh]
+
+    - name: Test SSH key authentication before restricting access
+      command: ssh -o BatchMode=yes -o ConnectTimeout=5 {{ new_user }}@localhost 'echo "SSH key test successful"'
+      register: ssh_test_result
+      failed_when: false
+      changed_when: false
+      tags: [user, ssh]
+
+    - name: Warning if SSH key test failed
+      debug:
+        msg: "WARNING: SSH key test failed. Proceeding with caution. Result: {{ ssh_test_result.stdout | default('No output') }}"
+      when: ssh_test_result.rc != 0
       tags: [user, ssh]
 
     - name: Configure sudoers for passwordless sudo (optional)
@@ -122,7 +175,14 @@
     # SSH SECURITY CONFIGURATION
     # ====================================
     
-    - name: Configure SSH security settings
+    - name: Backup original SSH configuration
+      copy:
+        src: /etc/ssh/sshd_config
+        dest: /etc/ssh/sshd_config.backup
+        remote_src: yes
+      tags: [security, ssh]
+
+    - name: Configure SSH security settings (step 1 - less restrictive)
       lineinfile:
         path: /etc/ssh/sshd_config
         regexp: "{{ item.regexp }}"
@@ -130,27 +190,41 @@
         backup: yes
         validate: '/usr/sbin/sshd -t -f %s'
       loop:
-        - { regexp: '^#?PasswordAuthentication.*', line: 'PasswordAuthentication no' }
-        - { regexp: '^#?PermitRootLogin.*', line: 'PermitRootLogin no' }
-        - { regexp: '^#?UsePAM.*', line: 'UsePAM no' }
         - { regexp: '^#?MaxAuthTries.*', line: 'MaxAuthTries 3' }
         - { regexp: '^#?ClientAliveInterval.*', line: 'ClientAliveInterval 300' }
         - { regexp: '^#?ClientAliveCountMax.*', line: 'ClientAliveCountMax 2' }
         - { regexp: '^#?X11Forwarding.*', line: 'X11Forwarding no' }
+      notify: restart ssh
+      tags: [security, ssh]
+
+    - name: Test SSH configuration (step 1)
+      command: sshd -t
+      changed_when: false
+      tags: [security, ssh]
+
+    - name: Configure SSH security settings (step 2 - more restrictive)
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        backup: yes
+        validate: '/usr/sbin/sshd -t -f %s'
+      loop:
+        - { regexp: '^#?PermitRootLogin.*', line: 'PermitRootLogin no' }
+        - { regexp: '^#?UsePAM.*', line: 'UsePAM no' }
         - { regexp: '^#?AllowUsers.*', line: "AllowUsers {{ new_user }}" }
       notify: restart ssh
       tags: [security, ssh]
 
-    - name: Ensure SSH service is running
-      systemd:
-        name: ssh
-        state: started
-        enabled: yes
-      tags: [security, ssh]
-
-    - name: Test SSH configuration
-      command: sshd -t
-      changed_when: false
+    # Only disable password authentication after everything else is confirmed
+    - name: Disable password authentication (final step)
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication.*'
+        line: 'PasswordAuthentication no'
+        backup: yes
+        validate: '/usr/sbin/sshd -t -f %s'
+      notify: restart ssh
       tags: [security, ssh]
 
     # ====================================
