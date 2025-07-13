@@ -114,6 +114,14 @@
         password: "!"  # Disable password login
       tags: [user, security]
 
+    - name: Configure sudoers for passwordless sudo
+      lineinfile:
+        path: /etc/sudoers
+        line: '%sudo ALL=(ALL) NOPASSWD:ALL'
+        validate: '/usr/sbin/visudo -cf %s'
+      when: disable_sudo_password
+      tags: [user, security]
+
     - name: Create .ssh directory for new user
       file:
         path: "/home/{{ new_user }}/.ssh"
@@ -149,27 +157,6 @@
         msg: "SSH key was not properly added to authorized_keys file"
       when: not authorized_keys_stat.stat.exists or ssh_public_key.split()[1] not in authorized_keys_content.stdout
       tags: [user, ssh]
-
-    - name: Test SSH key authentication before restricting access
-      command: ssh -o BatchMode=yes -o ConnectTimeout=5 {{ new_user }}@localhost 'echo "SSH key test successful"'
-      register: ssh_test_result
-      failed_when: false
-      changed_when: false
-      tags: [user, ssh]
-
-    - name: Warning if SSH key test failed
-      debug:
-        msg: "WARNING: SSH key test failed. Proceeding with caution. Result: {{ ssh_test_result.stdout | default('No output') }}"
-      when: ssh_test_result.rc != 0
-      tags: [user, ssh]
-
-    - name: Configure sudoers for passwordless sudo (optional)
-      lineinfile:
-        path: /etc/sudoers
-        line: '%sudo ALL=(ALL) NOPASSWD:ALL'
-        validate: '/usr/sbin/visudo -cf %s'
-      when: disable_sudo_password
-      tags: [user, security]
 
     # ====================================
     # SSH SECURITY CONFIGURATION
